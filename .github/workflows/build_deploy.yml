@@ -1,0 +1,33 @@
+name: Build and Deploy
+
+on:
+  workflow_dispatch: 
+  push:
+    branches: [ main ]
+
+env:
+  REGISTRY_NAMESPACE: forkai
+  CR_REGISTRY: reg.amap.work
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Login to registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: registry.cn-hangzhou.aliyuncs.com
+          username: ${{ secrets.CR_USERNAME }}
+          password: ${{ secrets.CR_PASSWORD }}
+
+      - name: Docker build image
+        run: |
+          docker build --file Dockerfile -t $CR_REGISTRY/$REGISTRY_NAMESPACE/git-action:$IMAGE_TAG .
+      - name: Docker push
+        run: |
+          docker push $CR_REGISTRY/$REGISTRY_NAMESPACE/git-action:$IMAGE_TAG
