@@ -4,30 +4,100 @@ on:
   workflow_dispatch: 
   push:
     branches: [ main ]
+    paths:
+      - '**'
 
 env:
-  REGISTRY_NAMESPACE: forkai
-  CR_REGISTRY: reg.amap.work
-  IMAGE_TAG: ${{ github.sha }}
+  REGISTRY_NAMESPACE: orrn
+  ACR_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  ECR_REGISTRY: dkr.ecr.ap-east-1.amazonaws.com
+  GHCR_REGISTRY: ghcr.io
+  GHCR_REGISTRY_NAMESPACE: orrn
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.filter.outputs.changes }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Detect changes
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          base: ${{ github.ref }}
+          filters: '.github/file-filters.yml'
+          list-files: json
   build:
     name: Build
+    needs: changes
+    strategy:
+      matrix:
+        image: ${{ fromJSON(needs.changes.outputs.packages) }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-
-      - name: Login to registry
+      - name: Check Registry Region
+        id: check-registry-region
+        run: |
+          echo "::set-output name=region::$(jq -c '.[] | select(.name == "${{ matrix.image }}")| .region ' .github/service.json )"
+          echo "::set-output name=tag::$(grep "TAG=" ${{ matrix.image }}/makefile | tr -d "TAG=" )"
+      - name: Login to Aliyun registry
+        if: ${{ contains(steps.check-registry-region.outputs.region, 'aliyun') }}
         uses: azure/docker-login@v1
         with:
           login-server: registry.cn-hangzhou.aliyuncs.com
-          username: ${{ secrets.CR_USERNAME }}
-          password: ${{ secrets.CR_PASSWORD }}
-
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      - name: Configure AWS credentials
+        if: ${{ contains(steps.check-registry-region.outputs.region, 'aws') }}
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-east-1
+      - name: Login to Amazon ECR
+        if: ${{ contains(steps.check-registry-region.outputs.region, 'aws') }}
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Login to Harbor
+        if: ${{ contains(steps.check-registry-region.outputs.region, 'harbor') }}
+        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        with:
+          registry: ${{ env.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+      
+      - name: Login to GHCR
+        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.BOT_GITHUB_TOKEN }}
+        
       - name: Docker build image
         run: |
-          docker build --file Dockerfile -t $CR_REGISTRY/$REGISTRY_NAMESPACE/git-action:$IMAGE_TAG .
-      - name: Docker push
+          # ${{ secrets.ACR_PROXY }}
+          cd ${{ matrix.image }}
+          DOCKER_BUILDKIT=1 docker build -t $ACR_REGISTRY/$REGISTRY_NAMESPACE/${{ matrix.image }}:${{steps.check-registry-region.outputs.tag}} .
+          DOCKER_BUILDKIT=1 docker build -t $ECR_REGISTRY/$REGISTRY_NAMESPACE/${{ matrix.image }}:${{steps.check-registry-region.outputs.tag}} .
+          DOCKER_BUILDKIT=1 docker build -t $HARBOR_REGISTRY/$REGISTRY_NAMESPACE/${{ matrix.image }}:${{steps.check-registry-region.outputs.tag}} .
+          DOCKER_BUILDKIT=1 docker build -t $GHCR_REGISTRY/$GHCR_REGISTRY_NAMESPACE/${{ matrix.image }}:${{steps.check-registry-region.outputs.tag}} .
+      - name: Docker push for ACR
+        if: ${{ contains(steps.check-registry-region.outputs.region, 'aliyun') }}
         run: |
-          docker push $CR_REGISTRY/$REGISTRY_NAMESPACE/git-action:$IMAGE_TAG
+          docker push $ACR_REGISTRY/$REGISTRY_NAMESPACE/${{ matrix.image }}:${{steps.check-registry-region.outputs.tag}}
+      - name: Docker push for ECR
+        if: ${{ contains(steps.check-registry-region.outputs.region, 'aws') }}
+        run: |
+          docker push $ECR_REGISTRY/$REGISTRY_NAMESPACE/${{ matrix.image }}:${{steps.check-registry-region.outputs.tag}}
+      - name: Docker push for Harbor
+        if: ${{ contains(steps.check-registry-region.outputs.region, 'harbor') }}
+        run: |
+          docker push $HARBOR_REGISTRY/$REGISTRY_NAMESPACE/${{ matrix.image }}:${{steps.check-registry-region.outputs.tag}}
+      - name: Docker push for GHCR
+        if: ${{ contains(steps.check-registry-region.outputs.region, 'ghcr') }}
+        run: |
+          docker push $GHCR_REGISTRY/$GHCR_REGISTRY_NAMESPACE/${{ matrix.image }}:${{steps.check-registry-region.outputs.tag}}

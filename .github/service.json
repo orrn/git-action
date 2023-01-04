@@ -1,0 +1,4 @@
+[
+    {"name": "tools","region": ["ghcr"]},
+    {"name": "android-app-builder","region": ["ghcr"]}
+]

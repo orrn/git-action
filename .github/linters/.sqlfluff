@@ -1,0 +1,4 @@
+[sqlfluff]
+dialect = postgres
+templater = dbt
+sql_file_exts = .sql,.dml,.ddl
