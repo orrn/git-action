@@ -16,6 +16,7 @@ RUN apt update \
        nmap \
        wget \
        redis-tools \
+       mysql-client \
        postgresql-client \
        android-tools-adb \
        s3fs \
